@@ -7,7 +7,7 @@ Install on Windows:
 
 Run:
   set SERVER_URL=wss://YOUR_RENDER_URL
-  set ROOM_CODE=TEST
+  set ROOM_CODE=ROOM1
   node windows_host_app.js
 
 Notes:
@@ -20,10 +20,10 @@ const WebSocket = require('ws');
 const keySender = require('node-key-sender');
 
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:3000';
-const ROOM_CODE = (process.env.ROOM_CODE || 'TEST').trim().toUpperCase();
+const ROOM_CODE = (process.env.ROOM_CODE || 'ROOM1').trim().toUpperCase();
 const HOST_NAME = process.env.HOST_NAME || 'Windows Host';
 
-const HEARTBEAT_MS = 30000;
+const HEARTBEAT_MS = 10000;
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 10000;
 
@@ -47,6 +47,28 @@ function sendPing() {
     console.log('Sending ping from host');
     socket.send(JSON.stringify({ type: 'ping', source: 'host' }));
   }
+}
+
+function scheduleReconnect() {
+  if (!shouldReconnect) return;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+
+  const delay = Math.min(
+    RECONNECT_BASE_MS * Math.max(1, reconnectAttempts + 1),
+    RECONNECT_MAX_MS
+  );
+
+  reconnectAttempts += 1;
+  log(`Reconnecting in ${Math.round(delay / 1000)} seconds...`);
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
 }
 
 function connect() {
@@ -81,7 +103,9 @@ function connect() {
         return;
       }
 
-      if (data.type !== 'slide') return;
+      if (data.type !== 'slide') {
+        return;
+      }
 
       const action = String(data.action || '').toLowerCase();
       const sender = String(data.username || 'someone');
@@ -102,27 +126,15 @@ function connect() {
     }
   });
 
-  socket.on('close', () => {
-    log('Disconnected from server.');
+  socket.on('close', (code, reason) => {
+    const reasonText = reason ? reason.toString() : '';
+    log(`Disconnected from server. code=${code}${reasonText ? ` reason=${reasonText}` : ''}`);
 
-    if (!shouldReconnect) return;
-
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
+    if (!shouldReconnect) {
+      return;
     }
 
-    const delay = Math.min(
-      RECONNECT_BASE_MS * Math.max(1, reconnectAttempts + 1),
-      RECONNECT_MAX_MS
-    );
-
-    reconnectAttempts += 1;
-    log(`Reconnecting in ${Math.round(delay / 1000)} seconds...`);
-
-    reconnectTimer = setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay);
+    scheduleReconnect();
   });
 
   socket.on('error', (error) => {
