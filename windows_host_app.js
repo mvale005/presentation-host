@@ -23,7 +23,7 @@ const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:3000';
 const ROOM_CODE = (process.env.ROOM_CODE || 'ROOM1').trim().toUpperCase();
 const HOST_NAME = process.env.HOST_NAME || 'Windows Host';
 
-const HEARTBEAT_MS = 10000;
+const HEARTBEAT_MS = 5000;
 const RECONNECT_BASE_MS = 2000;
 const RECONNECT_MAX_MS = 10000;
 

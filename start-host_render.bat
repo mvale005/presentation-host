@@ -1,5 +1,5 @@
 @echo off
-cd C:\presentation-host-render
+cd C:\presentation-host
 
 set SERVER_URL=wss://presentation-remote.onrender.com
 set ROOM_CODE=ROOM1

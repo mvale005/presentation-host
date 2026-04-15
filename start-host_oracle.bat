@@ -1,7 +1,8 @@
 @echo off
-cd C:\presentation-host-oracle
+cd C:\presentation-host
 
-set SERVER_URL=ws://163.192.207.1:3000 
+set SERVER_URL=wss://remote.mvapphub.com
+
 set ROOM_CODE=ROOM1
 
 echo Starting host app...
