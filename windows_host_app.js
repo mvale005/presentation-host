@@ -1,24 +1,12 @@
-/*
-Windows PowerPoint Host App
-
-Install on Windows:
-  npm init -y
-  npm install ws node-key-sender
-
-Run:
-  set SERVER_URL=wss://YOUR_RENDER_URL
-  set ROOM_CODE=ROOM1
-  node windows_host_app.js
-
-Notes:
-- Start PowerPoint slideshow mode first.
-- Keep the slideshow window focused.
-- This version auto-reconnects if the socket drops.
-*/
-
+const { exec } = require('child_process');
 const WebSocket = require('ws');
 const keySender = require('node-key-sender');
+const fs = require('fs');
+const path = require('path');
 
+// -----------------------------
+// CONFIG
+// -----------------------------
 const SERVER_URL = process.env.SERVER_URL || 'ws://localhost:3000';
 const ROOM_CODE = (process.env.ROOM_CODE || 'ROOM1').trim().toUpperCase();
 const HOST_NAME = process.env.HOST_NAME || 'Windows Host';
@@ -31,31 +19,89 @@ let socket = null;
 let shouldReconnect = true;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
+let currentSlide = 1;
 
-function log(message) {
-  console.log(message);
+// -----------------------------
+// EXPORT SLIDES
+// -----------------------------
+function exportSlides(slideNumber) {
+  console.log("EXPORT TRIGGERED:", slideNumber);
+
+  exec(
+    `powershell -ExecutionPolicy Bypass -File "C:\\presentation-host\\export.ps1" -slideIndex ${slideNumber}`,
+    (err, stdout, stderr) => {
+      console.log("STDOUT:", stdout);
+      console.log("STDERR:", stderr);
+
+      if (err) {
+        console.log("EXPORT ERROR:", err.message);
+      }
+    }
+  );
 }
 
+// -----------------------------
+// UPLOAD SLIDES
+// -----------------------------
+async function uploadSlides(slideNumber) {
+  const slidesDir = "C:\\presentation-host\\public\\slides";
+
+  const targets = [
+    `Slide${slideNumber}.PNG`,
+    `Slide${slideNumber + 1}.PNG`
+  ];
+
+  for (const file of targets) {
+    const filePath = path.join(slidesDir, file);
+
+    if (!fs.existsSync(filePath)) continue;
+
+    const fileBuffer = fs.readFileSync(filePath);
+
+    try {
+      await fetch("https://remote.mvapphub.com/upload-slide", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/octet-stream",
+          "File-Name": file
+        },
+        body: fileBuffer
+      });
+
+      console.log(`Uploaded: ${file}`);
+    } catch (err) {
+      console.log("Upload failed:", file, err.message);
+    }
+  }
+
+  console.log("Slides upload complete");
+}
+
+// -----------------------------
+// KEY PRESS
+// -----------------------------
 function pressKey(keyName) {
   return keySender.sendKey(keyName).catch((err) => {
-    console.error(`Failed to press ${keyName}:`, err && err.message ? err.message : err);
+    console.error(`Failed to press ${keyName}:`, err.message);
   });
 }
 
+// -----------------------------
+// PING
+// -----------------------------
 function sendPing() {
   if (socket && socket.readyState === WebSocket.OPEN) {
-    console.log('Sending ping from host');
     socket.send(JSON.stringify({ type: 'ping', source: 'host' }));
   }
 }
 
+// -----------------------------
+// RECONNECT
+// -----------------------------
 function scheduleReconnect() {
   if (!shouldReconnect) return;
 
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
+  if (reconnectTimer) clearTimeout(reconnectTimer);
 
   const delay = Math.min(
     RECONNECT_BASE_MS * Math.max(1, reconnectAttempts + 1),
@@ -63,24 +109,22 @@ function scheduleReconnect() {
   );
 
   reconnectAttempts += 1;
-  log(`Reconnecting in ${Math.round(delay / 1000)} seconds...`);
+  console.log(`Reconnecting in ${Math.round(delay / 1000)} seconds...`);
 
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, delay);
+  reconnectTimer = setTimeout(connect, delay);
 }
 
+// -----------------------------
+// CONNECT
+// -----------------------------
 function connect() {
-  log(`Connecting to: ${SERVER_URL}`);
-  log(`Room code: ${ROOM_CODE}`);
-  log(`Host name: ${HOST_NAME}`);
+  console.log(`Connecting to: ${SERVER_URL}`);
 
   socket = new WebSocket(SERVER_URL);
 
   socket.on('open', () => {
     reconnectAttempts = 0;
-    log('Connected to server.');
+    console.log('Connected to server.');
 
     socket.send(JSON.stringify({
       type: 'join',
@@ -89,52 +133,63 @@ function connect() {
       role: 'host'
     }));
 
-    log(`Joined room ${ROOM_CODE} as ${HOST_NAME}.`);
-    log('Waiting for slide commands...');
-
-    sendPing();
+    console.log(`Joined room ${ROOM_CODE}`);
   });
 
-  socket.on('message', (rawMessage) => {
+  socket.on('message', async (rawMessage) => {
     try {
       const data = JSON.parse(rawMessage.toString());
 
-      if (data.type === 'ping') {
-        return;
-      }
-
-      if (data.type !== 'slide') {
-        return;
-      }
+      if (data.type !== 'slide') return;
 
       const action = String(data.action || '').toLowerCase();
       const sender = String(data.username || 'someone');
 
       if (action === 'next') {
-        log(`${sender} clicked Next`);
-        pressKey('right');
-        return;
+        console.log(`${sender} → NEXT`);
+        await pressKey('right');
+
+        currentSlide += 1;
+
+    setInterval(() => {
+        exportSlides(currentSlide);
+        uploadSlides(currentSlide);
+      }, 1000); // every 1 second
+
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({
+            type: 'slideState',
+            slideNumber: currentSlide
+          }));
+        }
       }
 
       if (action === 'previous') {
-        log(`${sender} clicked Previous`);
-        pressKey('left');
-        return;
+        console.log(`${sender} → PREVIOUS`);
+        await pressKey('left');
+
+        currentSlide = Math.max(1, currentSlide - 1);
+          setInterval(() => {
+            exportSlides(currentSlide);
+            uploadSlides(currentSlide);
+          }, 1000); // every 1 second
+
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({
+            type: 'slideState',
+            slideNumber: currentSlide
+          }));
+        }
       }
-    } catch (error) {
-      console.error('Bad message:', error.message);
+
+    } catch (err) {
+      console.error('Bad message:', err.message);
     }
   });
 
-  socket.on('close', (code, reason) => {
-    const reasonText = reason ? reason.toString() : '';
-    log(`Disconnected from server. code=${code}${reasonText ? ` reason=${reasonText}` : ''}`);
-
-    if (!shouldReconnect) {
-      return;
-    }
-
-    scheduleReconnect();
+  socket.on('close', () => {
+    console.log('Disconnected');
+    if (shouldReconnect) scheduleReconnect();
   });
 
   socket.on('error', (error) => {
@@ -142,22 +197,25 @@ function connect() {
   });
 }
 
+// -----------------------------
+// HEARTBEAT
+// -----------------------------
 setInterval(sendPing, HEARTBEAT_MS);
 
+// -----------------------------
+// SHUTDOWN
+// -----------------------------
 process.on('SIGINT', () => {
   shouldReconnect = false;
 
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
-
-  if (socket) {
-    socket.close();
-  }
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (socket) socket.close();
 
   console.log('\nHost app stopped.');
   process.exit(0);
 });
 
+// -----------------------------
+// START
+// -----------------------------
 connect();
